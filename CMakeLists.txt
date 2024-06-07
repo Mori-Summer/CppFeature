@@ -6,14 +6,15 @@ set(CMAKE_CXX_STANDARD 20)
 file(GLOB SOURCE_FILES
     ${SOURCE_FILES}
     *.h
-    #coroutine/*.h
+    coroutine/*.h
 )
 
 file(GLOB SOURCE_FILES
     ${SOURCE_FILES}
     *.cpp
-    #coroutine/*.cpp
+    coroutine/*.cpp
 )
 
 
-add_executable(CppFeature ${SOURCE_FILES})
+add_executable(CppFeature ${SOURCE_FILES}
+        coroutine/ZExample1.cpp)
