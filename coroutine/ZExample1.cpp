@@ -6,11 +6,6 @@
 
 struct Generator
 {
-    /// 控制协程的生命周期和Generator的生命周期一致
-    ~Generator()
-    {
-        handle.destroy();
-    }
     /// 协程执行完成后，外部读取值时抛出异常
     class ExhaustedException : std::exception{};
 
@@ -89,6 +84,27 @@ struct Generator
         }
         throw ExhaustedException();
     }
+
+    /// 控制协程的生命周期和Generator的生命周期一致
+    ~Generator()
+    {
+        if (handle)
+        {
+            handle.destroy();
+        }
+    }
+
+    /// 同时对于每一个协程实例，都有且只有一个 Generator 实例与之对应
+    /// 因此我们只支持移动对象，而不支持复制对象
+    explicit Generator(std::coroutine_handle<promise_type> handle) noexcept
+            : handle(handle) {};
+
+    Generator(Generator &&generator) noexcept
+        : handle(std::exchange(generator.handle, {})) {};
+
+    Generator(Generator &) = delete;
+    Generator &operator=(Generator &) = delete;
+
 
     std::coroutine_handle<promise_type> handle;
 };

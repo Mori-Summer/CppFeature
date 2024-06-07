@@ -11,10 +11,11 @@ file(GLOB SOURCE_FILES
 
 file(GLOB SOURCE_FILES
     ${SOURCE_FILES}
-    *.cpp
-    coroutine/*.cpp
+    # *.cpp
+    # coroutine/ZExample1.cpp
+    # coroutine/ZExample1-2.cpp
+    coroutine/ZExample2.cpp
 )
 
 
-add_executable(CppFeature ${SOURCE_FILES}
-        coroutine/ZExample1.cpp)
+add_executable(CppFeature ${SOURCE_FILES})
