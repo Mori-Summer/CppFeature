@@ -148,7 +148,7 @@ struct Generator
 	/// 得到的这5个Generator又会整合成一个新的 Generator
 	
 	template<typename F>
-	std::invoke_result_t<F, T> flat_map(F f)
+	std::invoke_result_t<F, T> flat_map(F f) /// 这里的这个返回值必须显示的写出来
 	{
 		while (has_next())
 		{
