@@ -14,7 +14,8 @@ file(GLOB SOURCE_FILES
     # *.cpp
     # coroutine/ZExample1.cpp
     # coroutine/ZExample1-2.cpp
-    coroutine/ZExample2.cpp
+    # coroutine/ZExample2.cpp
+    coroutine/ZExample3.cpp
 )
 
 
