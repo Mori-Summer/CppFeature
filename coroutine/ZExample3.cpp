@@ -5,6 +5,8 @@
 #include <mutex>
 #include <list>
 #include <iostream>
+#include <functional>
+#include <condition_variable>
 
 /// 本例中，我们定义一个类型 Task 来作为协程的返回值
 /// Task 类型可以用来封装任何返回结果的异步行为
@@ -40,7 +42,6 @@ template <typename T>
 class TaskPromise;
 
 
-
 /// ---------- Result ----------
 template <typename T>
 class Result
@@ -69,7 +70,6 @@ private:
 	std::exception_ptr m_pException{nullptr};	// 抛出的异常
 };
 
-
 /// ---------- Promise Type ----------
 template <typename T>
 class TaskPromise
@@ -82,14 +82,245 @@ public:
 	{
 		return Task{ std::coroutine_handle<TaskPromise>::from_promise(*this) };
 	}
+	void unhandled_exception()
+	{
+		// 存储异常
+		std::lock_guard lock(m_lMutex);
+		m_tResult = Result<T>(std::current_exception());
+		// 通知 GetResult 中的 wait
+		m_conCompletion.notify_all();
+	}
+	void return_value(T value)
+	{
+		// 存储返回值
+		std::lock_guard lock(m_lMutex);
+		m_tResult = Result<T>(std::move(value));
+		// 通知 GetResult 中的 wait
+		m_conCompletion.notify_all();
+	}
+
+	/// co_await 支持相关接口
+	template <typename R>
+	TaskAwaiter<R> await_transform(Task<R>&& task)
+	{
+		// 返回一个TaskAwaiter对象
+		return TaskAwaiter<R>(std::move(task));
+	}
+
+	T GetResult()
+	{
+		// 如果 m_tResult 没有值，说明协程还没有运行完，等待值被写入后再返回
+		std::unique_lock lock(m_lMutex);
+		if (!m_tResult.has_value())
+		{
+			// 等待值写入后的 notify_all
+			m_conCompletion.wait(lock);
+		}
+		// 如果有值，直接返回 (或抛异常)
+		return m_tResult->GetOrThrow();
+	}
+
+	void OnCompleted(std::function<void(Result<T>)>&& func)
+	{
+		std::unique_lock lock(m_lMutex);
+		if (m_tResult.has_value())
+		{
+			// 结果有值，则立即执行func
+			auto value = m_tResult.value();
+			lock.unlock();
+			func(value);
+		}
+		else
+		{
+			// 否则则加入列表等待执行
+			m_listCompletionCallbacks.push_back(func);
+		}
+	}
 
 private:
+	// 回调
+	std::list<std::function<void(Result<T>)>> m_listCompletionCallbacks;
+	
+	// 回调通知
+	void NotifyCallbacks()
+	{
+		auto value = m_tResult.value();
+		for (auto& callback : m_listCompletionCallbacks)
+		{
+			callback(value);
+		}
+		// 调用完成，清空回调
+		m_listCompletionCallbacks.clear();
+	}
+
+private:
+	// 互斥量
+	std::mutex m_lMutex;
+	// 等待通知机制
+	std::condition_variable m_conCompletion;
+
 	// optional 可以判断 m_tResult 是否有值，借此可以判断协程是否执行完毕
-	std::optional<Result<T>> m_tResult;		// 存放结果
+	std::optional<Result<T>> m_tResult{};		// 存放结果
 
 };
 
+/// ---------- Awaitable ----------
+template <typename T>
+class TaskAwaiter
+{
+public:
+	explicit TaskAwaiter(Task<T>&& task) noexcept
+		: m_Task(std::move(task)) {};
+
+	TaskAwaiter(TaskAwaiter&& completion) noexcept
+		: m_Task(std::exchange(completion.m_Task, {})) {};
+
+	TaskAwaiter(TaskAwaiter&) = delete;
+	TaskAwaiter& operator=(TaskAwaiter) = delete;
+
+	/// awaitable协议相关接口
+	constexpr bool await_ready() const noexcept
+	{
+		/// co_await后立马挂起，然后走 await_suspend 的逻辑
+		return false;
+	}
+
+	void await_suspend(std::coroutine_handle<> handle) noexcept
+	{
+		// task执行完后，协程重新运行
+		m_Task.Finally([handle]() {
+			handle.resume();
+			});
+	}
+
+	T await_resume() noexcept
+	{
+		// 协程 resume 后执行到这里，返回task执行完后的值
+		return m_Task.GetResult();
+	}
+
+private:
+	Task<T> m_Task;
+};
+
+/// ---------- Task ----------
+template <typename T>
+class Task
+{
+public:
+	// 协程协议
+	using promise_type = TaskPromise<T>;
+
+	T GetResult()
+	{
+		return m_coroHandle.promise().GetResult();
+	}
+
+	// 执行回调
+	Task& Then(std::function<void(T)>&& func)
+	{
+		m_coroHandle.promise().OnCompleted([func](auto result) {
+			try
+			{
+				func(result.GetOrThrow());
+			}
+			catch (std::exception& e)
+			{
+
+			}
+			});
+		return *this;
+	}
+	// 执行异常
+	Task& Catching(std::function<void(std::exception&)>&& func)
+	{
+		m_coroHandle.promise().OnCompleted([func](auto result) {
+			try
+			{
+				result.GetOrThrow();
+			}
+			catch (std::exception& e)
+			{
+				func(e);
+			}
+			});
+		return *this;
+	}
+
+	Task& Finally(std::function<void()>&& func)
+	{
+		m_coroHandle.promise().OnCompleted([func](auto result) {
+			func();
+			});
+		return *this;
+	}
+
+	explicit Task(std::coroutine_handle<promise_type> handle) noexcept
+		: m_coroHandle(handle) {};
+
+	Task(Task&& task) noexcept
+		: m_coroHandle(std::exchange(task.m_coroHandle, {})) {};
+
+	Task(Task&) = delete;
+	Task& operator=(Task&) = delete;
+
+	~Task()
+	{
+		if (m_coroHandle)
+		{
+			m_coroHandle.destroy();
+		}
+	}
+
+private:
+	// 协程句柄
+	std::coroutine_handle<promise_type> m_coroHandle{};
+};
+
+
+Task<int> SimpleTask2()
+{
+	std::cout << "task 2 start" << std::endl;
+	std::this_thread::sleep_for(std::chrono::seconds(1));
+	std::cout << "task 2 return after 1s" << std::endl;
+	co_return 2;
+}
+
+Task<int> SimpleTask3()
+{
+	std::cout << "task 3 start" << std::endl;
+	std::this_thread::sleep_for(std::chrono::seconds(2));
+	std::cout << "task 3 return after 2s" << std::endl;
+	co_return 3;
+}
+
+Task<int> SimpleTask()
+{
+	std::cout << "task start" << std::endl;
+	auto result2 = co_await SimpleTask2();
+	std::cout << "returns from task2: " << result2 << std::endl;
+	auto result3 = co_await SimpleTask3();
+	std::cout << "returns from task3: " << result3 << std::endl;
+	co_return 1 + result2 + result3;
+}
+
 int main()
 {
-	std::cout << "good night" << std::endl;
+	auto simpleTask = SimpleTask();
+	simpleTask.Then([](int i) {
+		std::cout << "simpleTask end: " << i << std::endl;
+		})
+		.Catching([](std::exception& e) {
+		std::cout << "error occurred: " << e.what() << std::endl;
+			});
+	try
+	{
+		auto i = simpleTask.GetResult();
+		std::cout << "simple task end from get: " << i << std::endl;
+	}
+	catch (std::exception& e)
+	{
+		std::cout << "error: " << e.what() << std::endl;
+	}
+	return 0;
 }
