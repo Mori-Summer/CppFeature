@@ -1,13 +1,12 @@
 #include <coroutine>
-#include <thread>
-#include <chrono>
 #include <future>
 #include <iostream>
+#include <utility>
 
 struct Generator
 {
     /// 协程执行完成后，外部读取值时抛出异常
-    class ExhaustedException : std::exception{};
+    class ExhaustedException final : std::exception{};
 
     /// promise_type 是链接协程内外的桥梁，需要什么就找 promise_type要
     struct promise_type
@@ -22,10 +21,16 @@ struct Generator
         }
 
         /// 开始执行时直接挂起等待外部调用 resume 获取下一个值
-        std::suspend_always initial_suspend() {return {};};
+        std::suspend_always initial_suspend()
+        {
+            return {};
+        };
 
         /// 协程结束后（co_return执行后）挂起
-        std::suspend_always final_suspend() noexcept {return {};};
+        std::suspend_always final_suspend() noexcept
+        {
+            return {};
+        };
 
         /// 这里简化处理，默认不会抛出异常
         void unhandled_exception() {};
