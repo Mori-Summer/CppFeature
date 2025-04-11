@@ -1,0 +1,8 @@
+//
+// Created by Zhaoxulu on 2025/4/11.
+//
+
+#ifndef REMOVE_RVALUE_REFERENCE_H
+#define REMOVE_RVALUE_REFERENCE_H
+
+#endif //REMOVE_RVALUE_REFERENCE_H
